@@ -1,0 +1,62 @@
+name: "Hagrid Hybrid Deploy"
+
+on:
+  pull_request:
+    branches: [ "main" ]
+  push:
+    branches: [ "main" ]
+
+permissions:
+  contents: read
+  pull-requests: write # Allows commenting the plan back to the PR
+
+env:
+  TF_VAR_okta_org_name: ${{ secrets.OKTA_ORG_NAME }}
+  TF_VAR_okta_base_url: ${{ secrets.OKTA_BASE_URL }}
+  TF_VAR_okta_client_id: ${{ secrets.OKTA_CLIENT_ID }}
+  TF_VAR_okta_private_key: ${{ secrets.OKTA_PRIVATE_KEY }}
+
+jobs:
+  # STAGE 1: PLAN (Runs on every PR update)
+  plan:
+    name: "Terraform Plan (Preview)"
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false # Better for raw output handling
+
+      - name: Terraform Init
+        run: terraform init
+
+      - name: Terraform Plan
+        id: plan
+        run: terraform plan -no-color -input=false
+
+  # STAGE 2: APPLY (Runs ONLY when code lands on main)
+  apply:
+    name: "Terraform Apply (Production)"
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Terraform Init
+        run: terraform init
+
+      # We generate a fresh plan on the main branch to ensure no drift
+      - name: Final Safety Plan
+        run: terraform plan -out=deploy.tfplan -input=false
+
+      # We apply the EXACT plan we just generated 2 seconds ago
+      - name: Terraform Apply
+        run: terraform apply -input=false -auto-approve deploy.tfplan
